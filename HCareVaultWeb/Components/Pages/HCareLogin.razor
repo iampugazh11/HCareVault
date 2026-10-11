@@ -1,0 +1,74 @@
+@page "/"
+@page "/login"
+
+@layout HCareVaultWeb.Components.Layout.MainLayout
+
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Forms
+@inject NavigationManager Navigation
+
+<div class="login-container">
+    <div class="login-card">
+        <h2>Welcome Back</h2>
+        <p>Please log in to continue.</p>
+
+        <EditForm Model="@loginModel" OnValidSubmit="Login">
+            <DataAnnotationsValidator />
+
+            <div class="form-group">
+                <label>Username</label>
+                <InputText class="form-control"
+                           @bind-Value="loginModel.Username"
+                           placeholder="Enter username" />
+                <ValidationMessage For="@(() => loginModel.Username)" />
+            </div>
+
+            <div class="form-group">
+                <label>Password</label>
+                <InputText class="form-control"
+                           type="password"
+                           @bind-Value="loginModel.Password"
+                           placeholder="Enter password" />
+                <ValidationMessage For="@(() => loginModel.Password)" />
+            </div>
+
+            <button type="submit" class="login-button">
+                Login
+            </button>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <p class="error-message">@errorMessage</p>
+            }
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private LoginModel loginModel = new();  
+    private string errorMessage = string.Empty;
+
+    private void Login()
+    {
+        errorMessage = string.Empty;
+
+        // Demo credentials only.
+        if (loginModel.Username == "Admin" && loginModel.Password == "Admin")
+        {
+            Navigation.NavigateTo("/medicines");
+        }
+        else
+        {
+            errorMessage = "Invalid username or password.";
+        }
+    }
+
+    public class LoginModel
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "This field is required.")]        
+        public string Username { get; set; } = string.Empty;
+
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "This field is required.")]        
+        public string Password { get; set; } = string.Empty;
+    }
+}

@@ -1,0 +1,354 @@
+@page "/medicines"
+@page "/medicines/{MemberId:int}"
+@rendermode InteractiveServer
+@using HCareVault.Database
+@using HCareVault.Models
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>Family medicine cabinet</PageTitle>
+
+<div class="mt-app">
+    <header class="mt-head">
+        <h1>Family medicine cabinet</h1>
+        <p>Track what each person takes, when they take it, and how much is left.</p>
+    </header>
+
+    @if (!_loaded)
+    {
+        <p class="mt-muted">Loading...</p>
+    }
+    else if (_members.Count == 0)
+    {
+        <div class="mt-welcome">
+            <div class="mt-pill-art" aria-hidden="true"><i></i><i></i><i></i></div>
+            <h2>Start with your first family member</h2>
+            <p>Add a person, then record each of their medicines with doctor, stock and daily timings.</p>
+            <button class="mt-btn mt-btn-primary" @onclick="() => _showAddMember = true">Add family member</button>
+        </div>
+    }
+    else
+    {
+        <nav class="mt-members" aria-label="Family members">
+            @foreach (var m in _members)
+            {
+                <a class="mt-member @(m.Id == _selected?.Id ? "is-active" : "")" href="/medicines/@m.Id">
+                    <span class="mt-avatar av-@(m.Id % 5)">@char.ToUpper(m.Name.Trim()[0])</span>
+                    <span>
+                        @m.Name
+                        @if (!string.IsNullOrWhiteSpace(m.Relationship))
+                        {
+                            <small>@m.Relationship</small>
+                        }
+                    </span>
+                </a>
+            }
+            <button class="mt-btn" @onclick="() => _showAddMember = true">+ Add member</button>
+        </nav>
+
+        <section class="mt-panel">
+            <div class="mt-panel-head">
+                <div>
+                    <h2>@_selected!.Name's medicines</h2>
+                    <div class="mt-stats">
+                        <span><i style="background:var(--mt-ok)"></i>@ActiveCount taking now</span>
+                        <span><i style="background:#9aa8b1"></i>@StoppedCount stopped</span>
+                        <span><i style="background:var(--mt-danger)"></i>@LowCount low on stock</span>
+                    </div>
+                </div>
+                <div class="mt-controls">
+                    <label class="mt-switch">
+                        <input type="checkbox" @bind="_showStopped" />
+                        <span></span>
+                        Show stopped
+                    </label>
+                    <a class="mt-btn mt-btn-primary" href="/medicines/@_selected.Id/add">Add medicine</a>
+                </div>
+            </div>
+
+            <div class="mt-legend">
+                <span><b>Morning</b> <span class="mt-dose slot-morning after" style="margin-left:.3rem">After food</span> filled = after food</span>
+                <span><span class="mt-dose slot-afternoon before">Before food</span> outlined = before food</span>
+                <span>Red stock = @LowStockThreshold tablets or fewer</span>
+            </div>
+
+            <div class="mt-table-wrap">
+                <table class="mt-table">
+                    <thead>
+                        <tr>
+                            <th>Medicine</th>
+                            <th>Consultant doctor</th>
+                            <th class="mt-num">Bought</th>
+                            <th class="mt-num">Left</th>
+                            <th>Last bought</th>
+                            <th class="slot-th slot-morning">Morning</th>
+                            <th class="slot-th slot-afternoon">Afternoon</th>
+                            <th class="slot-th slot-night">Night</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @if (!Visible.Any())
+                    {
+                        <tr class="mt-empty-row">
+                            <td colspan="10">
+                                @if (_allMeds.Count == 0)
+                                {
+                                    <strong>No medicines recorded yet</strong>
+                                    <span>Add the first medicine for @_selected.Name to see it here.</span>
+                                    <div><a class="mt-btn mt-btn-primary" href="/medicines/@_selected.Id/add">Add medicine</a></div>
+                                }
+                                else
+                                {
+                                    <strong>No medicines are being taken right now</strong>
+                                    <span>@StoppedCount stopped @(StoppedCount == 1 ? "medicine is" : "medicines are") hidden.</span>
+                                    <div><button class="mt-btn" @onclick="() => _showStopped = true">Show stopped</button></div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var med in Visible)
+                    {
+                        var stopped = med.Status == MedicationStatus.Stopped;
+                        var low = !stopped && med.TabletsLeft <= LowStockThreshold;
+                        <tr class="@(stopped ? "mt-row-stopped" : "")">
+                            <td>
+                                <div class="mt-name">@med.MedicineName</div>
+                                @if (!string.IsNullOrWhiteSpace(med.Notes))
+                                {
+                                    <div class="mt-note">@med.Notes</div>
+                                }
+                            </td>
+                            <td>@if (string.IsNullOrWhiteSpace(med.ConsultantDoctor)) { <span class="mt-muted">Not recorded</span> } else { @med.ConsultantDoctor }</td>
+                            <td class="mt-num">@med.TabletsBought</td>
+                            <td class="mt-num">
+                                <span class="mt-left @(low ? "is-low" : "")">@med.TabletsLeft</span>
+                                <div class="mt-bar @(low ? "is-low" : "")"><span style="width:@(StockPercent(med))%"></span></div>
+                                @if (low)
+                                {
+                                    <span class="mt-tag-low">@(med.TabletsLeft == 0 ? "Out of stock" : "Running low")</span>
+                                }
+                            </td>
+                            <td>
+                                @if (med.LastPurchasedOn is { } d)
+                                {
+                                    <div>@d.ToString("dd MMM yyyy")</div>
+                                    <div class="mt-note">@Ago(d)</div>
+                                }
+                                else { <span class="mt-muted">-</span> }
+                            </td>
+                            <td><Dosage Slot="morning" Timing="med.Morning" /></td>
+                            <td><Dosage Slot="afternoon" Timing="med.Afternoon" /></td>
+                            <td><Dosage Slot="night" Timing="med.Night" /></td>
+                            <td><span class="mt-status @(stopped ? "is-stopped" : "")">@(stopped ? "Stopped" : "Taking now")</span></td>
+                            <td>
+                                <div class="mt-actions">
+                                    <button class="mt-btn mt-btn-sm" @onclick="() => OpenRestock(med)">Restock</button>
+                                    <a class="mt-btn mt-btn-sm" href="/medicines/edit/@med.Id">Edit</a>
+                                    <button class="mt-btn mt-btn-sm" @onclick="() => ToggleStatusAsync(med)">@(stopped ? "Resume" : "Stop")</button>
+                                    @if (_confirmDeleteId == med.Id)
+                                    {
+                                        <button class="mt-btn mt-btn-sm mt-btn-danger" @onclick="() => DeleteAsync(med)">Confirm delete</button>
+                                        <button class="mt-btn mt-btn-sm" @onclick="() => _confirmDeleteId = null">Cancel</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="mt-btn mt-btn-sm" @onclick="() => _confirmDeleteId = med.Id">Delete</button>
+                                    }
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+
+    @if (_showAddMember)
+    {
+        <div class="mt-backdrop">
+            <div class="mt-modal" role="dialog" aria-modal="true" aria-labelledby="addMemberTitle">
+                <div class="mt-modal-head"><h3 id="addMemberTitle">Add family member</h3></div>
+                <div class="mt-modal-body">
+                    <div class="mt-field">
+                        <label for="memberName">Name</label>
+                        <input id="memberName" class="mt-input" maxlength="80" @bind="_newMemberName" @bind:event="oninput" />
+                    </div>
+                    <div class="mt-field">
+                        <label for="memberRelationship">Relationship (optional)</label>
+                        <input id="memberRelationship" class="mt-input" maxlength="40" placeholder="Father, Mother, Self..." @bind="_newMemberRelationship" />
+                    </div>
+                </div>
+                <div class="mt-modal-foot">
+                    <button class="mt-btn" @onclick="CloseAddMember">Cancel</button>
+                    <button class="mt-btn mt-btn-primary" disabled="@string.IsNullOrWhiteSpace(_newMemberName)" @onclick="AddMemberAsync">Add member</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_restockTarget is not null)
+    {
+        <div class="mt-backdrop">
+            <div class="mt-modal" role="dialog" aria-modal="true" aria-labelledby="restockTitle">
+                <div class="mt-modal-head"><h3 id="restockTitle">Restock @_restockTarget.MedicineName</h3></div>
+                <div class="mt-modal-body">
+                    <div class="mt-field">
+                        <label for="restockQty">Tablets bought</label>
+                        <input id="restockQty" type="number" min="1" class="mt-input" @bind="_restockQty" @bind:event="oninput" />
+                        <div class="mt-quick">
+                            @foreach (var q in new[] { 10, 15, 30, 60 })
+                            {
+                                <button type="button" class="mt-btn mt-btn-sm" @onclick="() => _restockQty = q">+@q</button>
+                            }
+                        </div>
+                    </div>
+                    <div class="mt-field">
+                        <label for="restockDate">Purchase date</label>
+                        <input id="restockDate" type="date" class="mt-input" @bind="_restockDate" />
+                    </div>
+                    <div class="mt-preview">
+                        @_restockTarget.TabletsLeft left now
+                        @if (_restockQty > 0)
+                        {
+                            <text> &rarr; <strong>@(_restockTarget.TabletsLeft + _restockQty) left</strong> after restocking</text>
+                        }
+                    </div>
+                </div>
+                <div class="mt-modal-foot">
+                    <button class="mt-btn" @onclick="() => _restockTarget = null">Cancel</button>
+                    <button class="mt-btn mt-btn-primary" disabled="@(_restockQty < 1)" @onclick="RestockAsync">Add to stock</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private const int LowStockThreshold = 5;
+
+    [Parameter] public int? MemberId { get; set; }
+
+    private bool _loaded;
+    private List<FamilyMember> _members = new();
+    private FamilyMember? _selected;
+    private List<Medication> _allMeds = new();
+    private bool _showStopped = true;
+
+    private bool _showAddMember;
+    private string _newMemberName = "";
+    private string? _newMemberRelationship;
+
+    private Medication? _restockTarget;
+    private int _restockQty;
+    private DateTime _restockDate = DateTime.Today;
+
+    private int? _confirmDeleteId;
+
+    private IEnumerable<Medication> Visible =>
+        _showStopped ? _allMeds : _allMeds.Where(m => m.Status == MedicationStatus.Active);
+    private int ActiveCount => _allMeds.Count(m => m.Status == MedicationStatus.Active);
+    private int StoppedCount => _allMeds.Count(m => m.Status == MedicationStatus.Stopped);
+    private int LowCount => _allMeds.Count(m => m.Status == MedicationStatus.Active && m.TabletsLeft <= LowStockThreshold);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _members = await db.FamilyMembers.AsNoTracking().OrderBy(m => m.Name).ToListAsync();
+        _selected = _members.FirstOrDefault(m => m.Id == MemberId) ?? _members.FirstOrDefault();
+        await LoadMedicinesAsync();
+        _loaded = true;
+    }
+
+    private async Task LoadMedicinesAsync()
+    {
+        if (_selected is null) { _allMeds = new(); return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _allMeds = await db.Medications.AsNoTracking()
+            .Where(m => m.FamilyMemberId == _selected.Id)
+            .OrderBy(m => m.Status).ThenBy(m => m.MedicineName)
+            .ToListAsync();
+    }
+
+    private async Task AddMemberAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var member = new FamilyMember { Name = _newMemberName.Trim(), Relationship = _newMemberRelationship?.Trim() };
+        db.FamilyMembers.Add(member);
+        await db.SaveChangesAsync();
+        CloseAddMember();
+        Nav.NavigateTo($"/medicines/{member.Id}");
+    }
+
+    private void CloseAddMember()
+    {
+        _showAddMember = false;
+        _newMemberName = "";
+        _newMemberRelationship = null;
+    }
+
+    private void OpenRestock(Medication med)
+    {
+        _restockTarget = med;
+        _restockQty = 0;
+        _restockDate = DateTime.Today;
+    }
+
+    private async Task RestockAsync()
+    {
+        if (_restockTarget is null || _restockQty < 1) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var med = await db.Medications.FindAsync(_restockTarget.Id);
+        if (med is not null)
+        {
+            med.TabletsBought += _restockQty;   // cumulative total
+            med.TabletsLeft += _restockQty;     // previous leftover + new purchase
+            med.LastPurchasedOn = _restockDate;
+            await db.SaveChangesAsync();
+        }
+        _restockTarget = null;
+        await LoadMedicinesAsync();
+    }
+
+    private async Task ToggleStatusAsync(Medication med)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Medications.FindAsync(med.Id);
+        if (entity is null) return;
+
+        entity.Status = entity.Status == MedicationStatus.Active ? MedicationStatus.Stopped : MedicationStatus.Active;
+        await db.SaveChangesAsync();
+        await LoadMedicinesAsync();
+    }
+
+    private async Task DeleteAsync(Medication med)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Medications.FindAsync(med.Id);
+        if (entity is not null)
+        {
+            db.Medications.Remove(entity);
+            await db.SaveChangesAsync();
+        }
+        _confirmDeleteId = null;
+        await LoadMedicinesAsync();
+    }
+
+    private static int StockPercent(Medication m) =>
+        m.TabletsBought <= 0 ? 0 : Math.Clamp((int)Math.Round(100.0 * m.TabletsLeft / m.TabletsBought), 0, 100);
+
+    private static string Ago(DateTime d)
+    {
+        var days = (DateTime.Today - d.Date).Days;
+        return days <= 0 ? "today"
+             : days == 1 ? "yesterday"
+             : days < 30 ? $"{days} days ago"
+             : days < 365 ? $"{days / 30} mo ago"
+             : $"{days / 365} yr ago";
+    }
+}

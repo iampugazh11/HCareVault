@@ -1,0 +1,166 @@
+@page "/medicines/{MemberId:int}/add"
+@page "/medicines/edit/{Id:int}"
+@rendermode InteractiveServer
+@using HCareVault.Database
+@using HCareVault.Models
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsEdit ? "Edit medicine" : "Add medicine")</PageTitle>
+
+<div class="mt-app">
+    @if (_notFound)
+    {
+        <div class="mt-welcome">
+            <h2>We couldn't find that record</h2>
+            <p>The medicine or family member may have been deleted.</p>
+            <a class="mt-btn mt-btn-primary" href="/medicines">Back to medicines</a>
+        </div>
+    }
+    else if (_model is null)
+    {
+        <p class="mt-muted">Loading...</p>
+    }
+    else
+    {
+        <a class="mt-back" href="/medicines/@_model.FamilyMemberId">&larr; Back to @_memberName's medicines</a>
+        <header class="mt-head">
+            <h1>@(IsEdit ? "Edit medicine" : "Add medicine")</h1>
+            <p>For @_memberName</p>
+        </header>
+
+        <EditForm Model="_model" OnValidSubmit="SaveAsync" FormName="medicineForm" class="mt-form">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            @if (_error is not null)
+            {
+                <div class="mt-error">@_error</div>
+            }
+
+            <h2 class="mt-section">Medicine</h2>
+            <div class="mt-form-grid">
+                <div class="mt-field">
+                    <label class="mt-label">Medicine name</label>
+                    <InputText class="form-control" @bind-Value="_model.MedicineName" placeholder="e.g. Metformin 500 mg" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Consultant doctor</label>
+                    <InputText class="form-control" @bind-Value="_model.ConsultantDoctor" placeholder="e.g. Dr. Ramesh" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Status</label>
+                    <InputSelect class="form-select" @bind-Value="_model.Status">
+                        <option value="@MedicationStatus.Active">Taking now</option>
+                        <option value="@MedicationStatus.Stopped">Stopped</option>
+                    </InputSelect>
+                </div>
+            </div>
+
+            <h2 class="mt-section">Stock</h2>
+            <div class="mt-form-grid">
+                <div class="mt-field">
+                    <label class="mt-label">Tablets bought</label>
+                    <InputNumber class="form-control" @bind-Value="_model.TabletsBought" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Tablets left</label>
+                    <InputNumber class="form-control" @bind-Value="_model.TabletsLeft" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Last bought on</label>
+                    <InputDate class="form-control" @bind-Value="_model.LastPurchasedOn" />
+                </div>
+            </div>
+
+            <h2 class="mt-section">Daily schedule</h2>
+            <div class="mt-form-grid">
+                <div class="mt-field mt-slot-field slot-morning">
+                    <label class="mt-label">Morning</label>
+                    <InputSelect class="form-select" @bind-Value="_model.Morning">
+                        <option value="@MealTiming.None">Not taken</option>
+                        <option value="@MealTiming.BeforeFood">Before food</option>
+                        <option value="@MealTiming.AfterFood">After food</option>
+                    </InputSelect>
+                </div>
+                <div class="mt-field mt-slot-field slot-afternoon">
+                    <label class="mt-label">Afternoon</label>
+                    <InputSelect class="form-select" @bind-Value="_model.Afternoon">
+                        <option value="@MealTiming.None">Not taken</option>
+                        <option value="@MealTiming.BeforeFood">Before food</option>
+                        <option value="@MealTiming.AfterFood">After food</option>
+                    </InputSelect>
+                </div>
+                <div class="mt-field mt-slot-field slot-night">
+                    <label class="mt-label">Night</label>
+                    <InputSelect class="form-select" @bind-Value="_model.Night">
+                        <option value="@MealTiming.None">Not taken</option>
+                        <option value="@MealTiming.BeforeFood">Before food</option>
+                        <option value="@MealTiming.AfterFood">After food</option>
+                    </InputSelect>
+                </div>
+            </div>
+
+            <h2 class="mt-section">Notes</h2>
+            <div class="mt-field">
+                <InputText class="form-control" @bind-Value="_model.Notes" placeholder="Optional, e.g. take with plenty of water" />
+            </div>
+
+            <div class="mt-form-actions">
+                <button type="submit" class="mt-btn mt-btn-primary">Save medicine</button>
+                <a class="mt-btn" href="/medicines/@_model.FamilyMemberId">Cancel</a>
+            </div>
+        </EditForm>
+    }
+</div>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    [Parameter] public int? MemberId { get; set; }
+
+    private Medication? _model;
+    private string _memberName = "";
+    private string? _error;
+    private bool _notFound;
+
+    private bool IsEdit => Id.HasValue;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _notFound = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        if (Id.HasValue)
+        {
+            _model = await db.Medications.AsNoTracking().FirstOrDefaultAsync(m => m.Id == Id.Value);
+            if (_model is null) { _notFound = true; return; }
+        }
+        else
+        {
+            _model = new Medication { FamilyMemberId = MemberId ?? 0, LastPurchasedOn = DateTime.Today };
+        }
+
+        var member = await db.FamilyMembers.AsNoTracking().FirstOrDefaultAsync(m => m.Id == _model.FamilyMemberId);
+        if (member is null) { _model = null; _notFound = true; return; }
+        _memberName = member.Name;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_model is null) return;
+        _error = null;
+
+        if (_model.TabletsLeft > _model.TabletsBought)
+        {
+            _error = "Tablets left cannot be more than tablets bought.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (IsEdit) db.Medications.Update(_model);
+        else db.Medications.Add(_model);
+
+        await db.SaveChangesAsync();
+        Nav.NavigateTo($"/medicines/{_model.FamilyMemberId}");
+    }
+}

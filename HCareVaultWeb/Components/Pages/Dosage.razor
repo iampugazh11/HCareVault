@@ -1,0 +1,17 @@
+@using HCareVault.Models
+
+@if (Timing == MealTiming.None)
+{
+    <span class="mt-dose-none" title="Not taken">&mdash;</span>
+}
+else
+{
+    <span class="mt-dose slot-@Slot @(Timing == MealTiming.AfterFood ? "after" : "before")">
+        @(Timing == MealTiming.AfterFood ? "After food" : "Before food")
+    </span>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Slot { get; set; } = "morning";
+    [Parameter, EditorRequired] public MealTiming Timing { get; set; }
+}
