@@ -1,0 +1,250 @@
+@page "/records"
+@page "/records/{MemberId:int}"
+@rendermode InteractiveServer
+@using HCareVault.Database
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+@inject FileStorage Storage
+
+<PageTitle>Prescriptions &amp; reports</PageTitle>
+
+<div class="mt-app">
+    <AppHeader Active="records" MemberId="_selected?.Id" />
+
+    <header class="mt-head">
+        <h1>Prescriptions &amp; reports</h1>
+        <p>Every consultation, scan and lab report, linked to the doctors and hospitals involved.</p>
+    </header>
+
+    @if (!_loaded)
+    {
+        <p class="mt-muted">Loading...</p>
+    }
+    else if (_members.Count == 0)
+    {
+        <div class="mt-welcome">
+            <h2>Add a family member first</h2>
+            <p>Records are kept per person. Add someone on the Medicines tab, then come back here.</p>
+            <a class="mt-btn mt-btn-primary" href="/medicines">Go to Medicines</a>
+        </div>
+    }
+    else
+    {
+        <MemberPills Members="_members" SelectedId="_selected?.Id" BaseUrl="/records" />
+
+        <section class="mt-panel">
+            <div class="mt-panel-head">
+                <div>
+                    <h2>@_selected!.Name's records</h2>
+                    <div class="mt-stats">
+                        <span><i class="hv-dot type-prescription"></i>@Count(RecordType.Prescription) prescriptions</span>
+                        <span><i class="hv-dot type-scanreport"></i>@Count(RecordType.ScanReport) scan reports</span>
+                        <span><i class="hv-dot type-labreport"></i>@Count(RecordType.LabReport) lab reports</span>
+                        @if (_upcomingFollowUp is { } next)
+                        {
+                            <span><i style="background:var(--mt-morning)"></i>Next follow-up @next.ToString("dd MMM")</span>
+                        }
+                    </div>
+                </div>
+                <div class="mt-controls">
+                    <a class="mt-btn mt-btn-primary" href="/records/@_selected.Id/add">Add record</a>
+                </div>
+            </div>
+
+            <div class="hv-toolbar">
+                <div class="hv-seg" role="group" aria-label="Group records">
+                    <button class="@(_byDoctor ? "" : "is-active")" aria-pressed="@(!_byDoctor)" @onclick="() => _byDoctor = false">By date</button>
+                    <button class="@(_byDoctor ? "is-active" : "")" aria-pressed="@_byDoctor" @onclick="() => _byDoctor = true">By doctor</button>
+                </div>
+                <select class="mt-input hv-select" aria-label="Record type" @bind="_typeFilter">
+                    <option value="">All types</option>
+                    @foreach (var t in Enum.GetValues<RecordType>())
+                    {
+                        <option value="@t">@MedicalRecord.TypeLabel(t)</option>
+                    }
+                </select>
+                <select class="mt-input hv-select" aria-label="Doctor" @bind="_doctorFilter">
+                    <option value="0">All doctors</option>
+                    @foreach (var d in DoctorsInRecords)
+                    {
+                        <option value="@d.Id">@d.Name</option>
+                    }
+                </select>
+                <button class="mt-btn mt-btn-sm" @onclick="() => _newestFirst = !_newestFirst">
+                    @(_newestFirst ? "Newest first ↓" : "Oldest first ↑")
+                </button>
+            </div>
+
+            <div class="hv-records">
+                @if (!Filtered.Any())
+                {
+                    <div class="hv-empty">
+                        @if (_records.Count == 0)
+                        {
+                            <strong>No records yet</strong>
+                            <span>Add a prescription or scan report for @_selected.Name. You can attach photos or PDFs.</span>
+                            <div><a class="mt-btn mt-btn-primary" href="/records/@_selected.Id/add">Add record</a></div>
+                        }
+                        else
+                        {
+                            <strong>No records match these filters</strong>
+                            <div><button class="mt-btn" @onclick="ClearFilters">Clear filters</button></div>
+                        }
+                    </div>
+                }
+                else if (!_byDoctor)
+                {
+                    @foreach (var month in Filtered.GroupBy(r => new DateTime(r.RecordedAt.Year, r.RecordedAt.Month, 1)))
+                    {
+                        <h3 class="hv-group-head">@month.Key.ToString("MMMM yyyy") <span>@month.Count() @(month.Count() == 1 ? "record" : "records")</span></h3>
+                        @foreach (var r in month)
+                        {
+                            <RecordCard @key="r.Id" Record="r" OnDelete="DeleteAsync" OnOpenImage="url => _lightbox = url" />
+                        }
+                    }
+                }
+                else
+                {
+                    @foreach (var group in ByDoctor)
+                    {
+                        var doc = group.Key is { } id ? _doctors.GetValueOrDefault(id) : null;
+                        <div class="hv-doc-group">
+                            <div class="hv-doc-head">
+                                @if (doc is null)
+                                {
+                                    <span class="hv-doc-avatar is-none">?</span>
+                                    <div><strong>No doctor recorded</strong></div>
+                                }
+                                else
+                                {
+                                    <span class="hv-doc-avatar">@doc.Initials</span>
+                                    <div>
+                                        <strong>@doc.Name</strong>
+                                        <small>
+                                            @string.Join(" · ", new[] { doc.Specialization, doc.Hospital?.Name }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                                        </small>
+                                        <div class="hv-chips">
+                                            @foreach (var rf in _referrals.Where(x => x.ToDoctorId == doc.Id))
+                                            {
+                                                <span class="hv-chip" title="@rf.Reason">Recommended by @rf.FromDoctor?.Name</span>
+                                            }
+                                            @foreach (var rf in _referrals.Where(x => x.FromDoctorId == doc.Id))
+                                            {
+                                                <span class="hv-chip is-out" title="@rf.Reason">Recommends @rf.ToDoctor?.Name</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                <span class="hv-doc-count">@group.Count() @(group.Count() == 1 ? "record" : "records")
+                                    <br /><small>last @group.Max(r => r.RecordedAt).ToString("dd MMM yyyy")</small>
+                                </span>
+                            </div>
+                            @foreach (var r in group)
+                            {
+                                <RecordCard @key="r.Id" Record="r" ShowDoctor="false" OnDelete="DeleteAsync" OnOpenImage="url => _lightbox = url" />
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        </section>
+    }
+
+    <Lightbox Src="@_lightbox" OnClose="() => _lightbox = null" />
+</div>
+
+@code {
+    [Parameter] public int? MemberId { get; set; }
+
+    private bool _loaded;
+    private List<FamilyMember> _members = new();
+    private FamilyMember? _selected;
+    private List<MedicalRecord> _records = new();
+    private Dictionary<int, Doctor> _doctors = new();
+    private List<DoctorReferral> _referrals = new();
+    private DateTime? _upcomingFollowUp;
+
+    private bool _byDoctor;
+    private bool _newestFirst = true;
+    private string _typeFilter = "";
+    private int _doctorFilter;
+    private string? _lightbox;
+
+    private int Count(RecordType t) => _records.Count(r => r.Type == t);
+
+    private IEnumerable<Doctor> DoctorsInRecords => _records
+        .SelectMany(r => new[] { r.DoctorId, r.ReferredByDoctorId })
+        .OfType<int>().Distinct()
+        .Select(id => _doctors.GetValueOrDefault(id)).OfType<Doctor>()
+        .OrderBy(d => d.Name);
+
+    private IEnumerable<MedicalRecord> Filtered
+    {
+        get
+        {
+            IEnumerable<MedicalRecord> q = _records;
+            if (Enum.TryParse<RecordType>(_typeFilter, out var type)) q = q.Where(r => r.Type == type);
+            if (_doctorFilter != 0) q = q.Where(r => r.DoctorId == _doctorFilter || r.ReferredByDoctorId == _doctorFilter);
+            return _newestFirst ? q.OrderByDescending(r => r.RecordedAt) : q.OrderBy(r => r.RecordedAt);
+        }
+    }
+
+    /// <summary>Doctor groups, most recently consulted first; records without a doctor last.</summary>
+    private IEnumerable<IGrouping<int?, MedicalRecord>> ByDoctor => Filtered
+        .GroupBy(r => r.DoctorId)
+        .OrderBy(g => g.Key is null)
+        .ThenByDescending(g => g.Max(r => r.RecordedAt));
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _members = await db.FamilyMembers.AsNoTracking().OrderBy(m => m.Name).ToListAsync();
+        _selected = _members.FirstOrDefault(m => m.Id == MemberId) ?? _members.FirstOrDefault();
+        _doctors = await db.Doctors.AsNoTracking().Include(d => d.Hospital).ToDictionaryAsync(d => d.Id);
+        _doctorFilter = 0; // doctor list differs per member
+        await LoadRecordsAsync();
+        _loaded = true;
+    }
+
+    private async Task LoadRecordsAsync()
+    {
+        if (_selected is null) { _records = new(); _referrals = new(); return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _records = await db.MedicalRecords.AsNoTracking()
+            .Where(r => r.FamilyMemberId == _selected.Id)
+            .Include(r => r.Doctor)
+            .Include(r => r.ReferredByDoctor)
+            .Include(r => r.Hospital)
+            .Include(r => r.Attachments)
+            .ToListAsync();
+
+        // Recommendations made for this person, plus general ones not tied to anyone.
+        _referrals = await db.DoctorReferrals.AsNoTracking()
+            .Where(x => x.FamilyMemberId == null || x.FamilyMemberId == _selected.Id)
+            .Include(x => x.FromDoctor).Include(x => x.ToDoctor)
+            .ToListAsync();
+
+        _upcomingFollowUp = _records.Where(r => r.FollowUpOn >= DateTime.Today).Min(r => r.FollowUpOn);
+    }
+
+    private void ClearFilters()
+    {
+        _typeFilter = "";
+        _doctorFilter = 0;
+    }
+
+    private async Task DeleteAsync(MedicalRecord record)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.MedicalRecords.Include(r => r.Attachments).FirstOrDefaultAsync(r => r.Id == record.Id);
+        if (entity is not null)
+        {
+            var files = entity.Attachments.Select(a => a.StoredName).ToList();
+            db.MedicalRecords.Remove(entity);
+            await db.SaveChangesAsync();
+            files.ForEach(Storage.Delete);
+        }
+        await LoadRecordsAsync();
+    }
+}

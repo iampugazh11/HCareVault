@@ -1,0 +1,368 @@
+@page "/records/{MemberId:int}/add"
+@page "/records/edit/{Id:int}"
+@rendermode InteractiveServer
+@using HCareVault.Database
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+@inject NavigationManager Nav
+@inject FileStorage Storage
+
+<PageTitle>@(IsEdit ? "Edit record" : "Add record")</PageTitle>
+
+<div class="mt-app">
+    <AppHeader Active="records" MemberId="_model?.FamilyMemberId" />
+
+    @if (_notFound)
+    {
+        <div class="mt-welcome">
+            <h2>We couldn't find that record</h2>
+            <p>The record or family member may have been deleted.</p>
+            <a class="mt-btn mt-btn-primary" href="/records">Back to records</a>
+        </div>
+    }
+    else if (_model is null)
+    {
+        <p class="mt-muted">Loading...</p>
+    }
+    else
+    {
+        <a class="mt-back" href="/records/@_model.FamilyMemberId">&larr; Back to @_memberName's records</a>
+        <header class="mt-head">
+            <h1>@(IsEdit ? "Edit record" : "Add record")</h1>
+            <p>For @_memberName</p>
+        </header>
+
+        <EditForm Model="_model" OnValidSubmit="SaveAsync" FormName="recordForm" class="mt-form">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            @if (_error is not null)
+            {
+                <div class="mt-error">@_error</div>
+            }
+
+            <h2 class="mt-section">What is it?</h2>
+            <div class="hv-type-picker" role="radiogroup" aria-label="Record type">
+                @foreach (var t in Enum.GetValues<RecordType>())
+                {
+                    <button type="button" role="radio" aria-checked="@(_model.Type == t)"
+                            class="hv-type-option type-@t.ToString().ToLowerInvariant() @(_model.Type == t ? "is-active" : "")"
+                            @onclick="() => _model.Type = t">
+                        @MedicalRecord.TypeLabel(t)
+                    </button>
+                }
+            </div>
+            <div class="mt-form-grid">
+                <div class="mt-field">
+                    <label class="mt-label">Title</label>
+                    <InputText class="form-control" @bind-Value="_model.Title" placeholder="@TitlePlaceholder" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Date &amp; time</label>
+                    <InputDate Type="InputDateType.DateTimeLocal" class="form-control" @bind-Value="_model.RecordedAt" />
+                </div>
+            </div>
+
+            <h2 class="mt-section">Doctors &amp; hospital</h2>
+            <div class="mt-form-grid">
+                <div class="mt-field">
+                    <label class="mt-label">@MedicalRecord.DoctorLabel(_model.Type)</label>
+                    <div class="hv-inline">
+                        <InputSelect class="form-select" @bind-Value="_model.DoctorId" @bind-Value:after="OnDoctorChanged">
+                            <option value="">Not recorded</option>
+                            @foreach (var d in _doctors) { <option value="@d.Id">@DoctorOption(d)</option> }
+                        </InputSelect>
+                        <button type="button" class="mt-btn mt-btn-sm" title="Add a new doctor" @onclick="() => _addDoctorFor = DoctorField.Main">+ New</button>
+                    </div>
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">@MedicalRecord.ReferredByLabel(_model.Type) <span class="mt-muted">(optional)</span></label>
+                    <div class="hv-inline">
+                        <InputSelect class="form-select" @bind-Value="_model.ReferredByDoctorId">
+                            <option value="">None</option>
+                            @foreach (var d in _doctors) { <option value="@d.Id">@DoctorOption(d)</option> }
+                        </InputSelect>
+                        <button type="button" class="mt-btn mt-btn-sm" title="Add a new doctor" @onclick="() => _addDoctorFor = DoctorField.ReferredBy">+ New</button>
+                    </div>
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Hospital / clinic / scan centre</label>
+                    <div class="hv-inline">
+                        <InputSelect class="form-select" @bind-Value="_model.HospitalId">
+                            <option value="">Not recorded</option>
+                            @foreach (var h in _hospitals) { <option value="@h.Id">@h.Name</option> }
+                        </InputSelect>
+                        <button type="button" class="mt-btn mt-btn-sm" title="Add a new hospital" @onclick="() => _addHospital = true">+ New</button>
+                    </div>
+                </div>
+            </div>
+
+            <h2 class="mt-section">Details</h2>
+            <div class="mt-form-grid">
+                <div class="mt-field">
+                    <label class="mt-label">@(_model.Type == RecordType.Prescription ? "Diagnosis" : "Findings / impression") <span class="mt-muted">(optional)</span></label>
+                    <InputTextArea class="form-control" rows="3" @bind-Value="_model.Findings" />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Notes <span class="mt-muted">(optional)</span></label>
+                    <InputTextArea class="form-control" rows="3" @bind-Value="_model.Notes" placeholder="Advice given, tests suggested..." />
+                </div>
+                <div class="mt-field">
+                    <label class="mt-label">Follow-up on <span class="mt-muted">(optional)</span></label>
+                    <InputDate class="form-control" @bind-Value="_model.FollowUpOn" />
+                </div>
+            </div>
+
+            <h2 class="mt-section">Attachments</h2>
+            <p class="mt-note hv-mb">Photos or PDFs of the prescription / report. Up to @MaxFiles files, @(FileStorage.MaxAttachmentBytes / 1024 / 1024) MB each.</p>
+            <div class="hv-files hv-files-edit">
+                @foreach (var a in _existing)
+                {
+                    <div class="hv-file-tile">
+                        @if (a.IsImage)
+                        {
+                            <img src="@FileStorage.Url(a.StoredName)" alt="@a.FileName" />
+                        }
+                        else
+                        {
+                            <span class="hv-file-ext">@System.IO.Path.GetExtension(a.FileName).TrimStart('.').ToUpperInvariant()</span>
+                        }
+                        <span class="hv-file-name" title="@a.FileName">@a.FileName</span>
+                        <button type="button" class="hv-file-remove" aria-label="Remove @a.FileName" @onclick="() => RemoveExisting(a)">&times;</button>
+                    </div>
+                }
+                @foreach (var p in _pending)
+                {
+                    <div class="hv-file-tile is-new">
+                        @if (p.IsImage && p.Data.Length <= 1_500_000)
+                        {
+                            <img src="@p.DataUrl" alt="@p.FileName" />
+                        }
+                        else
+                        {
+                            <span class="hv-file-ext">@System.IO.Path.GetExtension(p.FileName).TrimStart('.').ToUpperInvariant()</span>
+                        }
+                        <span class="hv-file-name" title="@p.FileName">@p.FileName</span>
+                        <button type="button" class="hv-file-remove" aria-label="Remove @p.FileName" @onclick="() => _pending.Remove(p)">&times;</button>
+                    </div>
+                }
+                @if (_existing.Count + _pending.Count < MaxFiles)
+                {
+                    <label class="hv-upload-tile">
+                        <InputFile OnChange="OnFilesSelected" multiple accept="image/*,.pdf" />
+                        <span class="hv-upload-plus">+</span>
+                        <span>@(_uploading ? "Reading..." : "Add photo / PDF")</span>
+                    </label>
+                }
+            </div>
+            @if (_uploadError is not null)
+            {
+                <div class="mt-error">@_uploadError</div>
+            }
+
+            <div class="mt-form-actions">
+                <button type="submit" class="mt-btn mt-btn-primary" disabled="@(_uploading || _saving)">@(_saving ? "Saving..." : "Save record")</button>
+                <a class="mt-btn" href="/records/@_model.FamilyMemberId">Cancel</a>
+            </div>
+        </EditForm>
+    }
+
+    @if (_addDoctorFor is not null)
+    {
+        <DoctorEditor OnSaved="OnDoctorAdded" OnCancel="() => _addDoctorFor = null" />
+    }
+    @if (_addHospital)
+    {
+        <HospitalEditor OnSaved="OnHospitalAdded" OnCancel="() => _addHospital = false" />
+    }
+</div>
+
+@code {
+    private const int MaxFiles = 10;
+    private enum DoctorField { Main, ReferredBy }
+
+    [Parameter] public int? Id { get; set; }
+    [Parameter] public int? MemberId { get; set; }
+
+    private MedicalRecord? _model;
+    private string _memberName = "";
+    private List<Doctor> _doctors = new();
+    private List<Hospital> _hospitals = new();
+    private List<RecordAttachment> _existing = new();
+    private readonly List<RecordAttachment> _removed = new();
+    private readonly List<PendingUpload> _pending = new();
+
+    private string? _error;
+    private string? _uploadError;
+    private bool _notFound;
+    private bool _uploading;
+    private bool _saving;
+    private DoctorField? _addDoctorFor;
+    private bool _addHospital;
+
+    private bool IsEdit => Id.HasValue;
+
+    private string TitlePlaceholder => _model?.Type switch
+    {
+        RecordType.ScanReport => "e.g. MRI brain, Ultrasound abdomen",
+        RecordType.LabReport => "e.g. HbA1c, Lipid profile",
+        RecordType.Prescription => "e.g. Diabetes review, Fever consultation",
+        _ => "e.g. Discharge summary"
+    };
+
+    private static string DoctorOption(Doctor d) =>
+        string.IsNullOrWhiteSpace(d.Specialization) ? d.Name : $"{d.Name} ({d.Specialization})";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _notFound = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        if (Id.HasValue)
+        {
+            _model = await db.MedicalRecords.AsNoTracking().Include(r => r.Attachments).FirstOrDefaultAsync(r => r.Id == Id.Value);
+            if (_model is null) { _notFound = true; return; }
+            _existing = _model.Attachments.ToList();
+            _model.Attachments = new();
+        }
+        else
+        {
+            var now = DateTime.Now;
+            _model = new MedicalRecord
+            {
+                FamilyMemberId = MemberId ?? 0,
+                RecordedAt = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0)
+            };
+        }
+
+        var member = await db.FamilyMembers.AsNoTracking().FirstOrDefaultAsync(m => m.Id == _model.FamilyMemberId);
+        if (member is null) { _model = null; _notFound = true; return; }
+        _memberName = member.Name;
+
+        await LoadLookupsAsync(db);
+    }
+
+    private async Task LoadLookupsAsync(HCareDBContext db)
+    {
+        _doctors = await db.Doctors.AsNoTracking().OrderBy(d => d.Name).ToListAsync();
+        _hospitals = await db.Hospitals.AsNoTracking().OrderBy(h => h.Name).ToListAsync();
+    }
+
+    /// <summary>Picking a doctor fills in their hospital if none is chosen yet.</summary>
+    private void OnDoctorChanged()
+    {
+        if (_model is null || _model.HospitalId is not null) return;
+        _model.HospitalId = _doctors.FirstOrDefault(d => d.Id == _model.DoctorId)?.HospitalId;
+    }
+
+    private async Task OnDoctorAdded(Doctor doctor)
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync()) await LoadLookupsAsync(db);
+        if (_model is not null)
+        {
+            if (_addDoctorFor == DoctorField.ReferredBy) _model.ReferredByDoctorId = doctor.Id;
+            else { _model.DoctorId = doctor.Id; OnDoctorChanged(); }
+        }
+        _addDoctorFor = null;
+    }
+
+    private async Task OnHospitalAdded(Hospital hospital)
+    {
+        await using (var db = await DbFactory.CreateDbContextAsync()) await LoadLookupsAsync(db);
+        if (_model is not null) _model.HospitalId = hospital.Id;
+        _addHospital = false;
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _uploadError = null;
+        _uploading = true;
+        try
+        {
+            var room = MaxFiles - _existing.Count - _pending.Count;
+            foreach (var file in e.GetMultipleFiles(MaxFiles).Take(room))
+            {
+                if (!FileStorage.IsAllowed(file.Name))
+                {
+                    _uploadError = $"{file.Name}: only images (JPG, PNG, WEBP...) and PDF files are allowed.";
+                    continue;
+                }
+                if (file.Size > FileStorage.MaxAttachmentBytes)
+                {
+                    _uploadError = $"{file.Name} is larger than {FileStorage.MaxAttachmentBytes / 1024 / 1024} MB.";
+                    continue;
+                }
+                _pending.Add(await FileStorage.ReadAsync(file, FileStorage.MaxAttachmentBytes));
+            }
+            if (e.FileCount > room) _uploadError = $"Only {MaxFiles} attachments are allowed per record.";
+        }
+        catch (Exception ex)
+        {
+            _uploadError = $"Could not read the file: {ex.Message}";
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private void RemoveExisting(RecordAttachment a)
+    {
+        _existing.Remove(a);
+        _removed.Add(a);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_model is null || _saving) return;
+        _error = null;
+
+        if (_model.DoctorId is not null && _model.DoctorId == _model.ReferredByDoctorId)
+        {
+            _error = $"\"{MedicalRecord.ReferredByLabel(_model.Type)}\" should be a different doctor.";
+            return;
+        }
+
+        _saving = true;
+        var savedFiles = new List<string>();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            MedicalRecord entity;
+            if (IsEdit)
+            {
+                entity = await db.MedicalRecords.Include(r => r.Attachments).FirstAsync(r => r.Id == _model.Id);
+                db.Entry(entity).CurrentValues.SetValues(_model);
+                var removedIds = _removed.Select(a => a.Id).ToHashSet();
+                db.RecordAttachments.RemoveRange(entity.Attachments.Where(a => removedIds.Contains(a.Id)));
+            }
+            else
+            {
+                entity = _model;
+                db.MedicalRecords.Add(entity);
+            }
+
+            foreach (var p in _pending)
+            {
+                var stored = await Storage.SaveAsync(p);
+                savedFiles.Add(stored);
+                entity.Attachments.Add(new RecordAttachment
+                {
+                    FileName = Path.GetFileName(p.FileName),
+                    StoredName = stored,
+                    ContentType = string.IsNullOrEmpty(p.ContentType) ? "application/octet-stream" : p.ContentType,
+                    SizeBytes = p.Data.LongLength
+                });
+            }
+
+            await db.SaveChangesAsync();
+            _removed.ForEach(a => Storage.Delete(a.StoredName));
+            Nav.NavigateTo($"/records/{_model.FamilyMemberId}");
+        }
+        catch (Exception ex)
+        {
+            savedFiles.ForEach(Storage.Delete);
+            _error = $"Could not save the record: {ex.Message}";
+            _saving = false;
+        }
+    }
+}

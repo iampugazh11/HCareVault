@@ -6,10 +6,12 @@
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<HCareDBContext> DbFactory
 @inject NavigationManager Nav
+@inject FileStorage Storage
 
 <PageTitle>@(IsEdit ? "Edit medicine" : "Add medicine")</PageTitle>
 
 <div class="mt-app">
+    <AppHeader Active="medicines" MemberId="_model?.FamilyMemberId" />
     @if (_notFound)
     {
         <div class="mt-welcome">
@@ -106,8 +108,39 @@
                 <InputText class="form-control" @bind-Value="_model.Notes" placeholder="Optional, e.g. take with plenty of water" />
             </div>
 
+            <h2 class="mt-section">Photo <span class="mt-muted">(optional)</span></h2>
+            <div class="hv-photo-field">
+                <div class="hv-photo-preview">
+                    @if (PreviewSrc is { } src)
+                    {
+                        <img src="@src" alt="Photo of @_model.MedicineName" />
+                    }
+                    else
+                    {
+                        <div class="mt-pill-art" aria-hidden="true"><i></i><i></i></div>
+                    }
+                </div>
+                <div>
+                    <p class="mt-note hv-mb">A photo of the strip or box makes it easy to recognise when buying again.</p>
+                    <div class="hv-inline">
+                        <label class="mt-btn hv-file-btn">
+                            <InputFile OnChange="OnPhotoSelected" accept="image/*" />
+                            @(_uploading ? "Reading..." : PreviewSrc is null ? "Upload photo" : "Change photo")
+                        </label>
+                        @if (PreviewSrc is not null)
+                        {
+                            <button type="button" class="mt-btn" @onclick="RemovePhoto">Remove photo</button>
+                        }
+                    </div>
+                    @if (_photoError is not null)
+                    {
+                        <div class="mt-error">@_photoError</div>
+                    }
+                </div>
+            </div>
+
             <div class="mt-form-actions">
-                <button type="submit" class="mt-btn mt-btn-primary">Save medicine</button>
+                <button type="submit" class="mt-btn mt-btn-primary" disabled="@_uploading">Save medicine</button>
                 <a class="mt-btn" href="/medicines/@_model.FamilyMemberId">Cancel</a>
             </div>
         </EditForm>
@@ -123,7 +156,46 @@
     private string? _error;
     private bool _notFound;
 
+    // Photo: the stored file loaded with the record, and any change made on this form.
+    private string? _originalImage;
+    private PendingUpload? _newPhoto;
+    private bool _photoRemoved;
+    private bool _uploading;
+    private string? _photoError;
+
     private bool IsEdit => Id.HasValue;
+
+    private string? PreviewSrc =>
+        _newPhoto is not null ? _newPhoto.DataUrl
+        : !_photoRemoved && _originalImage is not null ? FileStorage.Url(_originalImage)
+        : null;
+
+    private async Task OnPhotoSelected(InputFileChangeEventArgs e)
+    {
+        _photoError = null;
+        _uploading = true;
+        try
+        {
+            // Shrink in the browser first: phone photos are often several MB.
+            var resized = await e.File.RequestImageFileAsync("image/jpeg", 1200, 1200);
+            var photo = await FileStorage.ReadAsync(resized, FileStorage.MaxImageBytes);
+            _newPhoto = photo with { FileName = Path.ChangeExtension(e.File.Name, ".jpg"), ContentType = "image/jpeg" };
+        }
+        catch (Exception)
+        {
+            _photoError = "Could not read that image. Please choose a JPG, PNG or WEBP photo under 5 MB.";
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private void RemovePhoto()
+    {
+        _newPhoto = null;
+        _photoRemoved = true;
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -134,6 +206,7 @@
         {
             _model = await db.Medications.AsNoTracking().FirstOrDefaultAsync(m => m.Id == Id.Value);
             if (_model is null) { _notFound = true; return; }
+            _originalImage = _model.ImageFile;
         }
         else
         {
@@ -156,11 +229,16 @@
             return;
         }
 
+        var replacesOriginal = _newPhoto is not null || _photoRemoved;
+        if (_newPhoto is not null) _model.ImageFile = await Storage.SaveAsync(_newPhoto);
+        else if (_photoRemoved) _model.ImageFile = null;
+
         await using var db = await DbFactory.CreateDbContextAsync();
         if (IsEdit) db.Medications.Update(_model);
         else db.Medications.Add(_model);
 
         await db.SaveChangesAsync();
+        if (replacesOriginal) Storage.Delete(_originalImage);
         Nav.NavigateTo($"/medicines/{_model.FamilyMemberId}");
     }
 }

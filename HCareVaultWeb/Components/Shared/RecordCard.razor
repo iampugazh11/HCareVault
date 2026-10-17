@@ -1,0 +1,104 @@
+@{ var r = Record; }
+<article class="hv-record type-@r.Type.ToString().ToLowerInvariant()">
+    <div class="hv-record-date">
+        <span class="hv-d">@r.RecordedAt.ToString("dd")</span>
+        <span class="hv-m">@r.RecordedAt.ToString("MMM yyyy")</span>
+        <span class="hv-t">@r.RecordedAt.ToString("hh:mm tt")</span>
+    </div>
+
+    <div class="hv-record-body">
+        <div class="hv-record-top">
+            <span class="hv-type">@MedicalRecord.TypeLabel(r.Type)</span>
+            <h4>@r.Title</h4>
+        </div>
+
+        <dl class="hv-meta">
+            @if (ShowDoctor)
+            {
+                <div>
+                    <dt>@MedicalRecord.DoctorLabel(r.Type)</dt>
+                    <dd>
+                        @if (r.Doctor is { } d)
+                        {
+                            @d.Name
+                            @if (!string.IsNullOrWhiteSpace(d.Specialization)) { <small> &middot; @d.Specialization</small> }
+                        }
+                        else { <span class="mt-muted">Not recorded</span> }
+                    </dd>
+                </div>
+            }
+            @if (r.Hospital is { } h)
+            {
+                <div><dt>Hospital</dt><dd>@h.Name</dd></div>
+            }
+            @if (r.ReferredByDoctor is { } rd)
+            {
+                <div><dt>@MedicalRecord.ReferredByLabel(r.Type)</dt><dd class="hv-link-doc">&#8618; @rd.Name</dd></div>
+            }
+            @if (r.FollowUpOn is { } f)
+            {
+                <div>
+                    <dt>Follow-up</dt>
+                    <dd class="@(f.Date >= DateTime.Today ? "hv-upcoming" : "")">@f.ToString("dd MMM yyyy")</dd>
+                </div>
+            }
+        </dl>
+
+        @if (!string.IsNullOrWhiteSpace(r.Findings))
+        {
+            <p class="hv-findings"><b>@(r.Type == RecordType.Prescription ? "Diagnosis" : "Findings"):</b> @r.Findings</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(r.Notes))
+        {
+            <p class="mt-note">@r.Notes</p>
+        }
+
+        @if (r.Attachments.Count > 0)
+        {
+            <div class="hv-files">
+                @foreach (var a in r.Attachments)
+                {
+                    var url = FileStorage.Url(a.StoredName);
+                    if (a.IsImage)
+                    {
+                        <button type="button" class="hv-thumb" title="@a.FileName" @onclick="() => OnOpenImage.InvokeAsync(url)">
+                            <img src="@url" alt="@a.FileName" loading="lazy" />
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="hv-file" href="@url" target="_blank" rel="noopener" title="@a.FileName">
+                            <span class="hv-file-ext">@System.IO.Path.GetExtension(a.FileName).TrimStart('.').ToUpperInvariant()</span>
+                            <span class="hv-file-name">@a.FileName</span>
+                        </a>
+                    }
+                }
+            </div>
+        }
+    </div>
+
+    <div class="mt-actions hv-record-actions">
+        <a class="mt-btn mt-btn-sm" href="/records/edit/@r.Id">Edit</a>
+        @if (_confirmDelete)
+        {
+            <button class="mt-btn mt-btn-sm mt-btn-danger" @onclick="() => OnDelete.InvokeAsync(r)">Confirm delete</button>
+            <button class="mt-btn mt-btn-sm" @onclick="() => _confirmDelete = false">Cancel</button>
+        }
+        else
+        {
+            <button class="mt-btn mt-btn-sm" @onclick="() => _confirmDelete = true">Delete</button>
+        }
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public MedicalRecord Record { get; set; } = default!;
+
+    /// <summary>False in the "by doctor" view, where the doctor is already the group heading.</summary>
+    [Parameter] public bool ShowDoctor { get; set; } = true;
+
+    [Parameter] public EventCallback<MedicalRecord> OnDelete { get; set; }
+    [Parameter] public EventCallback<string> OnOpenImage { get; set; }
+
+    private bool _confirmDelete;
+}

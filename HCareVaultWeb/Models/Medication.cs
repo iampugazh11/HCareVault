@@ -46,4 +46,8 @@ public class Medication
 
     [StringLength(500)]
     public string? Notes { get; set; }
+
+    /// <summary>Optional photo of the medicine strip / box (file name in the uploads folder).</summary>
+    [StringLength(100)]
+    public string? ImageFile { get; set; }
 }

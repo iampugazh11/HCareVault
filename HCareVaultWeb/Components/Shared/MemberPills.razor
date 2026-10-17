@@ -1,0 +1,23 @@
+<nav class="mt-members" aria-label="Family members">
+    @foreach (var m in Members)
+    {
+        <a class="mt-member @(m.Id == SelectedId ? "is-active" : "")" href="@BaseUrl/@m.Id">
+            <span class="mt-avatar av-@(m.Id % 5)">@char.ToUpper(m.Name.Trim()[0])</span>
+            <span>
+                @m.Name
+                @if (!string.IsNullOrWhiteSpace(m.Relationship))
+                {
+                    <small>@m.Relationship</small>
+                }
+            </span>
+        </a>
+    }
+    @ChildContent
+</nav>
+
+@code {
+    [Parameter, EditorRequired] public List<FamilyMember> Members { get; set; } = new();
+    [Parameter] public int? SelectedId { get; set; }
+    [Parameter, EditorRequired] public string BaseUrl { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

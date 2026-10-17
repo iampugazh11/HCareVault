@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hcarevault",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "HCareVaultWeb", "--launch-profile", "http", "--no-build"],
+      "port": 5095
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+<header class="hv-topbar">
+    <a class="hv-brand" href="/medicines">
+        <span class="hv-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Zm1 6v3h3v2h-3v3h-2v-3H8v-2h3V8h2Z" /></svg>
+        </span>
+        HCare Vault
+    </a>
+    <nav class="hv-tabs" aria-label="Sections">
+        <a class="hv-tab @(Active == "medicines" ? "is-active" : "")" href="@WithMember("/medicines")">Medicines</a>
+        <a class="hv-tab @(Active == "records" ? "is-active" : "")" href="@WithMember("/records")">Prescriptions &amp; reports</a>
+        <a class="hv-tab @(Active == "doctors" ? "is-active" : "")" href="/doctors">Doctors &amp; hospitals</a>
+    </nav>
+    <a class="hv-signout" href="/login">Sign out</a>
+</header>
+
+@code {
+    /// <summary>"medicines", "records" or "doctors".</summary>
+    [Parameter, EditorRequired] public string Active { get; set; } = "";
+
+    /// <summary>Keeps the selected family member when switching tabs.</summary>
+    [Parameter] public int? MemberId { get; set; }
+
+    private string WithMember(string url) => MemberId is { } id ? $"{url}/{id}" : url;
+}

@@ -1,0 +1,52 @@
+@using HCareVault.Database
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+
+<div class="mt-backdrop">
+    <div class="mt-modal" role="dialog" aria-modal="true" aria-labelledby="hospitalEditorTitle">
+        <div class="mt-modal-head"><h3 id="hospitalEditorTitle">@(_model.Id == 0 ? "Add hospital / clinic" : "Edit hospital / clinic")</h3></div>
+        <div class="mt-modal-body">
+            <div class="mt-field">
+                <label for="hospName">Name</label>
+                <input id="hospName" class="mt-input" maxlength="120" placeholder="e.g. Apollo Hospital, Greams Road" @bind="_model.Name" @bind:event="oninput" />
+            </div>
+            <div class="mt-field">
+                <label for="hospAddress">Address (optional)</label>
+                <input id="hospAddress" class="mt-input" maxlength="250" @bind="_model.Address" />
+            </div>
+            <div class="mt-field">
+                <label for="hospPhone">Phone (optional)</label>
+                <input id="hospPhone" class="mt-input" maxlength="30" @bind="_model.Phone" />
+            </div>
+        </div>
+        <div class="mt-modal-foot">
+            <button class="mt-btn" @onclick="OnCancel">Cancel</button>
+            <button class="mt-btn mt-btn-primary" disabled="@string.IsNullOrWhiteSpace(_model.Name)" @onclick="SaveAsync">Save hospital</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Hospital to edit; null to add a new one.</summary>
+    [Parameter] public Hospital? Hospital { get; set; }
+    [Parameter] public EventCallback<Hospital> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private Hospital _model = new();
+
+    protected override void OnInitialized()
+    {
+        if (Hospital is not null)
+            _model = new Hospital { Id = Hospital.Id, Name = Hospital.Name, Address = Hospital.Address, Phone = Hospital.Phone };
+    }
+
+    private async Task SaveAsync()
+    {
+        _model.Name = _model.Name.Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (_model.Id == 0) db.Hospitals.Add(_model);
+        else db.Hospitals.Update(_model);
+        await db.SaveChangesAsync();
+        await OnSaved.InvokeAsync(_model);
+    }
+}

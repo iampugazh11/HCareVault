@@ -1,0 +1,341 @@
+@page "/doctors"
+@rendermode InteractiveServer
+@using HCareVault.Database
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+
+<PageTitle>Doctors &amp; hospitals</PageTitle>
+
+<div class="mt-app">
+    <AppHeader Active="doctors" />
+
+    <header class="mt-head hv-head-row">
+        <div>
+            <h1>Doctors &amp; hospitals</h1>
+            <p>Everyone who treats your family, where they practise, and who recommended whom.</p>
+        </div>
+        <div class="mt-controls">
+            <button class="mt-btn" @onclick="() => OpenHospital(null)">Add hospital</button>
+            <button class="mt-btn" disabled="@(_doctors.Count < 2)" title="@(_doctors.Count < 2 ? "Add at least two doctors first" : null)" @onclick="() => OpenReferral(null)">Add recommendation</button>
+            <button class="mt-btn mt-btn-primary" @onclick="() => OpenDoctor(null)">Add doctor</button>
+        </div>
+    </header>
+
+    @if (!_loaded)
+    {
+        <p class="mt-muted">Loading...</p>
+    }
+    else
+    {
+        <section class="mt-panel hv-section">
+            <div class="mt-panel-head"><h2>Doctors <span class="hv-count">@_doctors.Count</span></h2></div>
+            @if (_doctors.Count == 0)
+            {
+                <div class="hv-empty">
+                    <strong>No doctors yet</strong>
+                    <span>Add the doctors your family consults. You can then link them to prescriptions, scan reports and each other.</span>
+                    <div><button class="mt-btn mt-btn-primary" @onclick="() => OpenDoctor(null)">Add doctor</button></div>
+                </div>
+            }
+            else
+            {
+                <div class="hv-doc-grid">
+                    @foreach (var d in _doctors)
+                    {
+                        var recommendedBy = _referrals.Where(r => r.ToDoctorId == d.Id).ToList();
+                        var recommends = _referrals.Where(r => r.FromDoctorId == d.Id).ToList();
+                        <article class="hv-doc-card">
+                            <div class="hv-doc-head">
+                                <span class="hv-doc-avatar">@d.Initials</span>
+                                <div>
+                                    <strong>@d.Name</strong>
+                                    <small>@(string.IsNullOrWhiteSpace(d.Specialization) ? "Specialization not set" : d.Specialization)</small>
+                                </div>
+                            </div>
+                            <dl class="hv-meta">
+                                <div><dt>Hospital</dt><dd>@(d.Hospital?.Name ?? "Not linked")</dd></div>
+                                @if (!string.IsNullOrWhiteSpace(d.Phone)) { <div><dt>Phone</dt><dd><a href="tel:@d.Phone">@d.Phone</a></dd></div> }
+                                <div><dt>Records</dt><dd>@_recordCounts.GetValueOrDefault(d.Id)</dd></div>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(d.Notes)) { <p class="mt-note">@d.Notes</p> }
+
+                            @if (recommendedBy.Count > 0 || recommends.Count > 0)
+                            {
+                                <div class="hv-chips">
+                                    @foreach (var r in recommendedBy)
+                                    {
+                                        <span class="hv-chip" title="@r.Reason">&#8592; Recommended by @r.FromDoctor?.Name</span>
+                                    }
+                                    @foreach (var r in recommends)
+                                    {
+                                        <span class="hv-chip is-out" title="@r.Reason">&#8594; Recommends @r.ToDoctor?.Name</span>
+                                    }
+                                </div>
+                            }
+
+                            <div class="mt-actions hv-card-actions">
+                                <button class="mt-btn mt-btn-sm" disabled="@(_doctors.Count < 2)" @onclick="() => OpenReferral(d)">Recommend...</button>
+                                <button class="mt-btn mt-btn-sm" @onclick="() => OpenDoctor(d)">Edit</button>
+                                @if (_confirmDoctorId == d.Id)
+                                {
+                                    <button class="mt-btn mt-btn-sm mt-btn-danger" @onclick="() => DeleteDoctorAsync(d)">Confirm delete</button>
+                                    <button class="mt-btn mt-btn-sm" @onclick="() => _confirmDoctorId = null">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="mt-btn mt-btn-sm" title="Records stay, but are unlinked from this doctor" @onclick="() => _confirmDoctorId = d.Id">Delete</button>
+                                }
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+
+        <section class="mt-panel hv-section">
+            <div class="mt-panel-head">
+                <div>
+                    <h2>Doctor recommendations <span class="hv-count">@_referrals.Count</span></h2>
+                    <div class="mt-note">When one doctor refers or recommends another.</div>
+                </div>
+            </div>
+            @if (_referrals.Count == 0)
+            {
+                <div class="hv-empty"><span>No recommendations recorded yet.</span></div>
+            }
+            else
+            {
+                <div class="mt-table-wrap">
+                    <table class="mt-table hv-table-compact">
+                        <thead><tr><th>Date</th><th>Recommended by</th><th></th><th>Recommended to</th><th>For</th><th>Reason</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var r in _referrals.OrderByDescending(r => r.ReferredOn))
+                            {
+                                <tr>
+                                    <td>@r.ReferredOn.ToString("dd MMM yyyy")</td>
+                                    <td><strong>@r.FromDoctor?.Name</strong><div class="mt-note">@r.FromDoctor?.Specialization</div></td>
+                                    <td class="hv-arrow" aria-label="recommends">&#8594;</td>
+                                    <td><strong>@r.ToDoctor?.Name</strong><div class="mt-note">@r.ToDoctor?.Specialization</div></td>
+                                    <td>@(r.FamilyMember?.Name ?? "Anyone")</td>
+                                    <td>@r.Reason</td>
+                                    <td>
+                                        <div class="mt-actions">
+                                            <button class="mt-btn mt-btn-sm" @onclick="() => EditReferral(r)">Edit</button>
+                                            <button class="mt-btn mt-btn-sm" @onclick="() => DeleteReferralAsync(r)">Delete</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="mt-panel hv-section">
+            <div class="mt-panel-head"><h2>Hospitals &amp; clinics <span class="hv-count">@_hospitals.Count</span></h2></div>
+            @if (_hospitals.Count == 0)
+            {
+                <div class="hv-empty"><span>No hospitals yet. Add one here or while adding a doctor.</span></div>
+            }
+            else
+            {
+                <div class="mt-table-wrap">
+                    <table class="mt-table hv-table-compact">
+                        <thead><tr><th>Name</th><th>Address</th><th>Phone</th><th>Doctors</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var h in _hospitals)
+                            {
+                                var docs = _doctors.Where(d => d.HospitalId == h.Id).Select(d => d.Name).ToList();
+                                <tr>
+                                    <td><strong>@h.Name</strong></td>
+                                    <td>@h.Address</td>
+                                    <td>@h.Phone</td>
+                                    <td>@(docs.Count == 0 ? "-" : string.Join(", ", docs))</td>
+                                    <td>
+                                        <div class="mt-actions">
+                                            <button class="mt-btn mt-btn-sm" @onclick="() => OpenHospital(h)">Edit</button>
+                                            @if (_confirmHospitalId == h.Id)
+                                            {
+                                                <button class="mt-btn mt-btn-sm mt-btn-danger" @onclick="() => DeleteHospitalAsync(h)">Confirm delete</button>
+                                                <button class="mt-btn mt-btn-sm" @onclick="() => _confirmHospitalId = null">Cancel</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="mt-btn mt-btn-sm" @onclick="() => _confirmHospitalId = h.Id">Delete</button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+
+    @if (_editDoctor)
+    {
+        <DoctorEditor Doctor="_doctorTarget" OnSaved="_ => CloseEditorsAndReloadAsync()" OnCancel="() => _editDoctor = false" />
+    }
+    @if (_editHospital)
+    {
+        <HospitalEditor Hospital="_hospitalTarget" OnSaved="_ => CloseEditorsAndReloadAsync()" OnCancel="() => _editHospital = false" />
+    }
+    @if (_referral is not null)
+    {
+        <div class="mt-backdrop">
+            <div class="mt-modal" role="dialog" aria-modal="true" aria-labelledby="referralTitle">
+                <div class="mt-modal-head"><h3 id="referralTitle">@(_referral.Id == 0 ? "Add recommendation" : "Edit recommendation")</h3></div>
+                <div class="mt-modal-body">
+                    <div class="mt-field">
+                        <label for="refFrom">Recommended by</label>
+                        <select id="refFrom" class="mt-input" @bind="_referral.FromDoctorId">
+                            <option value="0">Choose doctor...</option>
+                            @foreach (var d in _doctors) { <option value="@d.Id">@d.Name</option> }
+                        </select>
+                    </div>
+                    <div class="mt-field">
+                        <label for="refTo">Recommended to</label>
+                        <select id="refTo" class="mt-input" @bind="_referral.ToDoctorId">
+                            <option value="0">Choose doctor...</option>
+                            @foreach (var d in _doctors.Where(d => d.Id != _referral.FromDoctorId)) { <option value="@d.Id">@DoctorLabel(d)</option> }
+                        </select>
+                    </div>
+                    <div class="mt-field">
+                        <label for="refFor">For (optional)</label>
+                        <select id="refFor" class="mt-input" @bind="_referralMember">
+                            <option value="0">Anyone / general</option>
+                            @foreach (var m in _members) { <option value="@m.Id">@m.Name</option> }
+                        </select>
+                    </div>
+                    <div class="mt-field">
+                        <label for="refDate">Date</label>
+                        <input id="refDate" type="date" class="mt-input" @bind="_referral.ReferredOn" />
+                    </div>
+                    <div class="mt-field">
+                        <label for="refReason">Reason (optional)</label>
+                        <input id="refReason" class="mt-input" maxlength="300" placeholder="e.g. For knee pain, second opinion" @bind="_referral.Reason" />
+                    </div>
+                </div>
+                <div class="mt-modal-foot">
+                    <button class="mt-btn" @onclick="() => _referral = null">Cancel</button>
+                    <button class="mt-btn mt-btn-primary" disabled="@(!CanSaveReferral)" @onclick="SaveReferralAsync">Save</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _loaded;
+    private List<Doctor> _doctors = new();
+    private List<Hospital> _hospitals = new();
+    private List<DoctorReferral> _referrals = new();
+    private List<FamilyMember> _members = new();
+    private Dictionary<int, int> _recordCounts = new();
+
+    private bool _editDoctor;
+    private Doctor? _doctorTarget;
+    private bool _editHospital;
+    private Hospital? _hospitalTarget;
+    private DoctorReferral? _referral;
+    private int _referralMember;
+    private int? _confirmDoctorId;
+    private int? _confirmHospitalId;
+
+    private bool CanSaveReferral => _referral is { FromDoctorId: > 0, ToDoctorId: > 0 }
+                                    && _referral.FromDoctorId != _referral.ToDoctorId;
+
+    private static string DoctorLabel(Doctor d) =>
+        string.IsNullOrWhiteSpace(d.Specialization) ? d.Name : $"{d.Name} ({d.Specialization})";
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _doctors = await db.Doctors.AsNoTracking().Include(d => d.Hospital).OrderBy(d => d.Name).ToListAsync();
+        _hospitals = await db.Hospitals.AsNoTracking().OrderBy(h => h.Name).ToListAsync();
+        _members = await db.FamilyMembers.AsNoTracking().OrderBy(m => m.Name).ToListAsync();
+        _referrals = await db.DoctorReferrals.AsNoTracking()
+            .Include(r => r.FromDoctor).Include(r => r.ToDoctor).Include(r => r.FamilyMember)
+            .ToListAsync();
+        _recordCounts = await db.MedicalRecords.AsNoTracking()
+            .Where(r => r.DoctorId != null)
+            .GroupBy(r => r.DoctorId!.Value)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count);
+        _loaded = true;
+    }
+
+    private void OpenDoctor(Doctor? d) { _doctorTarget = d; _editDoctor = true; }
+    private void OpenHospital(Hospital? h) { _hospitalTarget = h; _editHospital = true; }
+
+    private async Task CloseEditorsAndReloadAsync()
+    {
+        _editDoctor = false;
+        _editHospital = false;
+        await LoadAsync();
+    }
+
+    private void OpenReferral(Doctor? from)
+    {
+        _referral = new DoctorReferral { FromDoctorId = from?.Id ?? 0, ReferredOn = DateTime.Today };
+        _referralMember = 0;
+    }
+
+    private void EditReferral(DoctorReferral r)
+    {
+        _referral = new DoctorReferral
+        {
+            Id = r.Id, FromDoctorId = r.FromDoctorId, ToDoctorId = r.ToDoctorId,
+            FamilyMemberId = r.FamilyMemberId, ReferredOn = r.ReferredOn, Reason = r.Reason
+        };
+        _referralMember = r.FamilyMemberId ?? 0;
+    }
+
+    private async Task SaveReferralAsync()
+    {
+        if (_referral is null || !CanSaveReferral) return;
+        _referral.FamilyMemberId = _referralMember == 0 ? null : _referralMember;
+        _referral.Reason = string.IsNullOrWhiteSpace(_referral.Reason) ? null : _referral.Reason.Trim();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (_referral.Id == 0) db.DoctorReferrals.Add(_referral);
+        else db.DoctorReferrals.Update(_referral);
+        await db.SaveChangesAsync();
+        _referral = null;
+        await LoadAsync();
+    }
+
+    private async Task DeleteReferralAsync(DoctorReferral r)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.DoctorReferrals.Where(x => x.Id == r.Id).ExecuteDeleteAsync();
+        await LoadAsync();
+    }
+
+    private async Task DeleteDoctorAsync(Doctor d)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Keep the records, just unlink the doctor.
+        await db.MedicalRecords.Where(r => r.DoctorId == d.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.DoctorId, (int?)null));
+        await db.MedicalRecords.Where(r => r.ReferredByDoctorId == d.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.ReferredByDoctorId, (int?)null));
+        await db.DoctorReferrals.Where(r => r.FromDoctorId == d.Id || r.ToDoctorId == d.Id).ExecuteDeleteAsync();
+        await db.Doctors.Where(x => x.Id == d.Id).ExecuteDeleteAsync();
+        _confirmDoctorId = null;
+        await LoadAsync();
+    }
+
+    private async Task DeleteHospitalAsync(Hospital h)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Doctors.Where(d => d.HospitalId == h.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.HospitalId, (int?)null));
+        await db.MedicalRecords.Where(r => r.HospitalId == h.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.HospitalId, (int?)null));
+        await db.Hospitals.Where(x => x.Id == h.Id).ExecuteDeleteAsync();
+        _confirmHospitalId = null;
+        await LoadAsync();
+    }
+}

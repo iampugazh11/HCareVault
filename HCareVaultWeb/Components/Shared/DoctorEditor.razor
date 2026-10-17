@@ -1,0 +1,107 @@
+@using HCareVault.Database
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<HCareDBContext> DbFactory
+
+<div class="mt-backdrop">
+    <div class="mt-modal" role="dialog" aria-modal="true" aria-labelledby="doctorEditorTitle">
+        <div class="mt-modal-head"><h3 id="doctorEditorTitle">@(_model.Id == 0 ? "Add doctor" : "Edit doctor")</h3></div>
+        <div class="mt-modal-body">
+            <div class="mt-field">
+                <label for="docName">Name</label>
+                <input id="docName" class="mt-input" maxlength="100" placeholder="e.g. Dr. Lakshmi Narayanan" @bind="_model.Name" @bind:event="oninput" />
+            </div>
+            <div class="mt-field">
+                <label for="docSpec">Specialization (optional)</label>
+                <input id="docSpec" class="mt-input" maxlength="80" placeholder="Cardiologist, General physician..." list="hv-specs" @bind="_model.Specialization" />
+                <datalist id="hv-specs">
+                    @foreach (var s in CommonSpecializations) { <option value="@s"></option> }
+                </datalist>
+            </div>
+            <div class="mt-field">
+                <label for="docHospital">Hospital / clinic (optional)</label>
+                <select id="docHospital" class="mt-input" @bind="_hospitalChoice">
+                    <option value="">Not linked</option>
+                    @foreach (var h in _hospitals) { <option value="@h.Id">@h.Name</option> }
+                    <option value="new">+ New hospital...</option>
+                </select>
+                @if (_hospitalChoice == "new")
+                {
+                    <input class="mt-input hv-mt-sm" maxlength="120" placeholder="New hospital name" @bind="_newHospitalName" @bind:event="oninput" />
+                }
+            </div>
+            <div class="mt-field">
+                <label for="docPhone">Phone (optional)</label>
+                <input id="docPhone" class="mt-input" maxlength="30" @bind="_model.Phone" />
+            </div>
+            <div class="mt-field">
+                <label for="docNotes">Notes (optional)</label>
+                <input id="docNotes" class="mt-input" maxlength="500" placeholder="Consulting hours, room number..." @bind="_model.Notes" />
+            </div>
+        </div>
+        <div class="mt-modal-foot">
+            <button class="mt-btn" @onclick="OnCancel">Cancel</button>
+            <button class="mt-btn mt-btn-primary" disabled="@(!CanSave)" @onclick="SaveAsync">Save doctor</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly string[] CommonSpecializations =
+    {
+        "General physician", "Cardiologist", "Diabetologist", "Endocrinologist", "Neurologist", "Orthopedic",
+        "Gastroenterologist", "Nephrologist", "Pulmonologist", "Dermatologist", "ENT", "Ophthalmologist",
+        "Gynecologist", "Pediatrician", "Psychiatrist", "Oncologist", "Urologist", "Radiologist", "Dentist"
+    };
+
+    /// <summary>Doctor to edit; null to add a new one.</summary>
+    [Parameter] public Doctor? Doctor { get; set; }
+    [Parameter] public EventCallback<Doctor> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private Doctor _model = new();
+    private List<Hospital> _hospitals = new();
+    private string _hospitalChoice = "";
+    private string _newHospitalName = "";
+
+    private bool CanSave => !string.IsNullOrWhiteSpace(_model.Name)
+                            && (_hospitalChoice != "new" || !string.IsNullOrWhiteSpace(_newHospitalName));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Doctor is not null)
+        {
+            _model = new Doctor
+            {
+                Id = Doctor.Id, Name = Doctor.Name, Specialization = Doctor.Specialization,
+                HospitalId = Doctor.HospitalId, Phone = Doctor.Phone, Notes = Doctor.Notes
+            };
+            _hospitalChoice = Doctor.HospitalId?.ToString() ?? "";
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _hospitals = await db.Hospitals.AsNoTracking().OrderBy(h => h.Name).ToListAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        if (_hospitalChoice == "new")
+        {
+            var hospital = new Hospital { Name = _newHospitalName.Trim() };
+            db.Hospitals.Add(hospital);
+            await db.SaveChangesAsync();
+            _model.HospitalId = hospital.Id;
+        }
+        else
+        {
+            _model.HospitalId = int.TryParse(_hospitalChoice, out var id) ? id : null;
+        }
+
+        _model.Name = _model.Name.Trim();
+        if (_model.Id == 0) db.Doctors.Add(_model);
+        else db.Doctors.Update(_model);
+        await db.SaveChangesAsync();
+        await OnSaved.InvokeAsync(_model);
+    }
+}

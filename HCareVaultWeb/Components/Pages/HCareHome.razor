@@ -6,10 +6,13 @@
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<HCareDBContext> DbFactory
 @inject NavigationManager Nav
+@inject FileStorage Storage
 
 <PageTitle>Family medicine cabinet</PageTitle>
 
 <div class="mt-app">
+    <AppHeader Active="medicines" MemberId="_selected?.Id" />
+
     <header class="mt-head">
         <h1>Family medicine cabinet</h1>
         <p>Track what each person takes, when they take it, and how much is left.</p>
@@ -30,22 +33,9 @@
     }
     else
     {
-        <nav class="mt-members" aria-label="Family members">
-            @foreach (var m in _members)
-            {
-                <a class="mt-member @(m.Id == _selected?.Id ? "is-active" : "")" href="/medicines/@m.Id">
-                    <span class="mt-avatar av-@(m.Id % 5)">@char.ToUpper(m.Name.Trim()[0])</span>
-                    <span>
-                        @m.Name
-                        @if (!string.IsNullOrWhiteSpace(m.Relationship))
-                        {
-                            <small>@m.Relationship</small>
-                        }
-                    </span>
-                </a>
-            }
+        <MemberPills Members="_members" SelectedId="_selected?.Id" BaseUrl="/medicines">
             <button class="mt-btn" @onclick="() => _showAddMember = true">+ Add member</button>
-        </nav>
+        </MemberPills>
 
         <section class="mt-panel">
             <div class="mt-panel-head">
@@ -115,11 +105,22 @@
                         var low = !stopped && med.TabletsLeft <= LowStockThreshold;
                         <tr class="@(stopped ? "mt-row-stopped" : "")">
                             <td>
-                                <div class="mt-name">@med.MedicineName</div>
-                                @if (!string.IsNullOrWhiteSpace(med.Notes))
-                                {
-                                    <div class="mt-note">@med.Notes</div>
-                                }
+                                <div class="hv-med-cell">
+                                    @if (med.ImageFile is { } img)
+                                    {
+                                        <button type="button" class="hv-med-thumb" title="View photo of @med.MedicineName"
+                                                @onclick="() => { _lightbox = FileStorage.Url(img); _lightboxCaption = med.MedicineName; }">
+                                            <img src="@FileStorage.Url(img)" alt="@med.MedicineName" loading="lazy" />
+                                        </button>
+                                    }
+                                    <div>
+                                        <div class="mt-name">@med.MedicineName</div>
+                                        @if (!string.IsNullOrWhiteSpace(med.Notes))
+                                        {
+                                            <div class="mt-note">@med.Notes</div>
+                                        }
+                                    </div>
+                                </div>
                             </td>
                             <td>@if (string.IsNullOrWhiteSpace(med.ConsultantDoctor)) { <span class="mt-muted">Not recorded</span> } else { @med.ConsultantDoctor }</td>
                             <td class="mt-num">@med.TabletsBought</td>
@@ -225,6 +226,8 @@
             </div>
         </div>
     }
+
+    <Lightbox Src="@_lightbox" Caption="@_lightboxCaption" OnClose="() => _lightbox = null" />
 </div>
 
 @code {
@@ -247,6 +250,8 @@
     private DateTime _restockDate = DateTime.Today;
 
     private int? _confirmDeleteId;
+    private string? _lightbox;
+    private string? _lightboxCaption;
 
     private IEnumerable<Medication> Visible =>
         _showStopped ? _allMeds : _allMeds.Where(m => m.Status == MedicationStatus.Active);
@@ -334,6 +339,7 @@
         {
             db.Medications.Remove(entity);
             await db.SaveChangesAsync();
+            Storage.Delete(entity.ImageFile);
         }
         _confirmDeleteId = null;
         await LoadMedicinesAsync();
